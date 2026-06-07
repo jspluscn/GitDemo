@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: repo-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: repo_db
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./repository-core-service/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - repo-network
+
+  # Redis
+  redis:
+    image: redis:6-alpine
+    container_name: repo-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - repo-network
+
+  # Eureka 注册中心
+  eureka:
+    build: ./cloud-eureka
+    container_name: repo-eureka
+    ports:
+      - "8761:8761"
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - repo-network
+
+  # 网关服务
+  gateway:
+    build: ./cloud-gateway
+    container_name: repo-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - eureka
+    environment:
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka:8761/eureka/
+    networks:
+      - repo-network
+
+  # 核心服务
+  core-service:
+    build: ./repository-core-service
+    container_name: repo-core-service
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mysql
+      - redis
+      - eureka
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/repo_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=root123
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PORT=6379
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka:8761/eureka/
+      - REPO_STORAGE_NAS_BASE_PATH=/mnt/nas/git-repositories
+    volumes:
+      - nas-storage:/mnt/nas/git-repositories
+    networks:
+      - repo-network
+
+volumes:
+  mysql-data:
+  redis-data:
+  nas-storage:
+
+networks:
+  repo-network:
+    driver: bridge
