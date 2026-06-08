@@ -10,8 +10,11 @@ import java.util.List;
 @Data
 public class CommitRequest {
 
-    /** 仓库 ID */
-    private Long repoId;
+    /** 部署编码 */
+    private String deployCode;
+
+    /** 空间编码 */
+    private String spaceCode;
 
     /** 操作人 */
     private String operator;

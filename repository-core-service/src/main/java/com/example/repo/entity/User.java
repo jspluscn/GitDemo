@@ -16,7 +16,7 @@ public class User {
     private String fullName;
     private Integer status;
     @TableField(fill = FieldFill.INSERT)
-    private LocalDateTime createdAt;
+    private LocalDateTime createDate;
     @TableField(fill = FieldFill.INSERT_UPDATE)
-    private LocalDateTime updatedAt;
+    private LocalDateTime lastUpdatedDate;
 }

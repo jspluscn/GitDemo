@@ -24,13 +24,14 @@ public class DistributedLockManager {
 
     /**
      * 获取仓库级锁 (L1)
-     * @param repoId 仓库 ID
+     * @param deployCode 部署编码
+     * @param spaceCode 空间编码
      * @param waitTime 等待时间 (秒)
      * @param leaseTime 租约时间 (秒)
      * @return 锁对象，null 表示获取失败
      */
-    public RLock tryGetRepoLock(Long repoId, long waitTime, long leaseTime) {
-        String lockKey = LOCK_PREFIX + repoId + REPO_LOCK_SUFFIX;
+    public RLock tryGetRepoLock(String deployCode, String spaceCode, long waitTime, long leaseTime) {
+        String lockKey = LOCK_PREFIX + deployCode + ":" + spaceCode + REPO_LOCK_SUFFIX;
         RLock lock = redissonClient.getLock(lockKey);
         try {
             if (lock.tryLock(waitTime, leaseTime, TimeUnit.SECONDS)) {
@@ -44,14 +45,15 @@ public class DistributedLockManager {
 
     /**
      * 获取文件级锁 (L2)
-     * @param repoId 仓库 ID
+     * @param deployCode 部署编码
+     * @param spaceCode 空间编码
      * @param filePath 文件路径
      * @param waitTime 等待时间 (秒)
      * @param leaseTime 租约时间 (秒)
      * @return 锁对象，null 表示获取失败
      */
-    public RLock tryGetFileLock(Long repoId, String filePath, long waitTime, long leaseTime) {
-        String lockKey = LOCK_PREFIX + repoId + FILE_LOCK_SUFFIX + filePath.replace("/", "_");
+    public RLock tryGetFileLock(String deployCode, String spaceCode, String filePath, long waitTime, long leaseTime) {
+        String lockKey = LOCK_PREFIX + deployCode + ":" + spaceCode + FILE_LOCK_SUFFIX + filePath.replace("/", "_");
         RLock lock = redissonClient.getLock(lockKey);
         try {
             if (lock.tryLock(waitTime, leaseTime, TimeUnit.SECONDS)) {

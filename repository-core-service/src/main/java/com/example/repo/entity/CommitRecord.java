@@ -9,12 +9,13 @@ import java.time.LocalDateTime;
 public class CommitRecord {
     @TableId(type = IdType.AUTO)
     private Long id;
-    private Long repoId;
+    private String deployCode;  // 部署编码
+    private String spaceCode;   // 空间编码
     private String commitHash;
     private Long authorId;
     private String authorName;
     private String message;
     private LocalDateTime commitTime;
     private String parentHash;
-    private LocalDateTime createdAt;
+    private LocalDateTime createDate;
 }

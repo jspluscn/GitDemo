@@ -32,8 +32,8 @@ public class GitService {
     /**
      * 初始化仓库
      */
-    public Git initRepo(Long repoId) throws GitAPIException {
-        String repoPath = getRepoPath(repoId);
+    public Git initRepo(String deployCode, String spaceCode) throws GitAPIException {
+        String repoPath = getRepoPath(deployCode, spaceCode);
         File repoDir = new File(repoPath);
         if (!repoDir.exists()) {
             repoDir.mkdirs();
@@ -44,8 +44,8 @@ public class GitService {
     /**
      * 打开仓库
      */
-    public Git openRepo(Long repoId) throws IOException {
-        String repoPath = getRepoPath(repoId);
+    public Git openRepo(String deployCode, String spaceCode) throws IOException {
+        String repoPath = getRepoPath(deployCode, spaceCode);
         File repoDir = new File(repoPath);
         return Git.open(repoDir);
     }
@@ -53,8 +53,8 @@ public class GitService {
     /**
      * 添加文件到暂存区
      */
-    public void addFile(Long repoId, String filePath) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void addFile(String deployCode, String spaceCode, String filePath) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.add().addFilepattern(filePath).call();
         }
     }
@@ -62,9 +62,9 @@ public class GitService {
     /**
      * 提交变更
      */
-    public String commit(Long repoId, String message, String authorName, String authorEmail) 
+    public String commit(String deployCode, String spaceCode, String message, String authorName, String authorEmail) 
             throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             PersonIdent ident = new PersonIdent(authorName, authorEmail);
             RevCommit revCommit = git.commit()
                     .setAuthor(ident)
@@ -77,9 +77,9 @@ public class GitService {
     /**
      * 获取文件历史
      */
-    public List<CommitInfo> getFileHistory(Long repoId, String filePath) throws IOException, GitAPIException {
+    public List<CommitInfo> getFileHistory(String deployCode, String spaceCode, String filePath) throws IOException, GitAPIException {
         List<CommitInfo> history = new ArrayList<>();
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             Iterable<RevCommit> logs = git.log().addPath(filePath).call();
             for (RevCommit commit : logs) {
                 CommitInfo info = new CommitInfo();
@@ -97,11 +97,11 @@ public class GitService {
     /**
      * 读取文件内容
      */
-    public String readFileContent(Long repoId, String filePath, String commitHash) throws IOException {
-        try (Git git = openRepo(repoId)) {
+    public String readFileContent(String deployCode, String spaceCode, String filePath, String commitHash) throws IOException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             if (commitHash == null || commitHash.isEmpty()) {
                 // 读取工作区文件
-                File file = new File(getRepoPath(repoId), filePath);
+                File file = new File(getRepoPath(deployCode, spaceCode), filePath);
                 if (file.exists()) {
                     return java.nio.file.Files.readString(file.toPath());
                 }
@@ -114,8 +114,8 @@ public class GitService {
     /**
      * 写入文件内容
      */
-    public void writeFileContent(Long repoId, String filePath, String content) throws IOException {
-        File file = new File(getRepoPath(repoId), filePath);
+    public void writeFileContent(String deployCode, String spaceCode, String filePath, String content) throws IOException {
+        File file = new File(getRepoPath(deployCode, spaceCode), filePath);
         File parent = file.getParentFile();
         if (parent != null && !parent.exists()) {
             parent.mkdirs();
@@ -126,9 +126,9 @@ public class GitService {
     /**
      * 删除文件
      */
-    public void deleteFile(Long repoId, String filePath) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
-            File file = new File(getRepoPath(repoId), filePath);
+    public void deleteFile(String deployCode, String spaceCode, String filePath) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
+            File file = new File(getRepoPath(deployCode, spaceCode), filePath);
             if (file.exists()) {
                 file.delete();
                 git.rm().addFilepattern(filePath).call();
@@ -139,8 +139,8 @@ public class GitService {
     /**
      * 创建分支
      */
-    public void createBranch(Long repoId, String branchName) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void createBranch(String deployCode, String spaceCode, String branchName) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.branchCreate().setName(branchName).call();
         }
     }
@@ -148,8 +148,8 @@ public class GitService {
     /**
      * 切换分支
      */
-    public void checkoutBranch(Long repoId, String branchName) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void checkoutBranch(String deployCode, String spaceCode, String branchName) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.checkout().setName(branchName).call();
         }
     }
@@ -157,8 +157,8 @@ public class GitService {
     /**
      * 获取当前分支
      */
-    public String getCurrentBranch(Long repoId) throws IOException {
-        try (Git git = openRepo(repoId)) {
+    public String getCurrentBranch(String deployCode, String spaceCode) throws IOException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             return git.getRepository().getBranch();
         }
     }
@@ -166,15 +166,15 @@ public class GitService {
     /**
      * 获取仓库路径
      */
-    public String getRepoPath(Long repoId) {
-        return nasBasePath + "/repo_" + repoId;
+    public String getRepoPath(String deployCode, String spaceCode) {
+        return nasBasePath + "/" + deployCode + "/" + spaceCode;
     }
 
     /**
      * 创建文件夹（通过创建 .gitkeep 文件让 Git 追踪）
      */
-    public void createFolder(Long repoId, String folderPath) throws IOException, GitAPIException {
-        File folder = new File(getRepoPath(repoId), folderPath);
+    public void createFolder(String deployCode, String spaceCode, String folderPath) throws IOException, GitAPIException {
+        File folder = new File(getRepoPath(deployCode, spaceCode), folderPath);
         if (!folder.exists()) {
             folder.mkdirs();
         }
@@ -183,7 +183,7 @@ public class GitService {
         if (!gitkeep.exists()) {
             gitkeep.createNewFile();
         }
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.add().addFilepattern(folderPath + "/.gitkeep").call();
         }
     }
@@ -192,22 +192,22 @@ public class GitService {
      * 删除文件夹及其下所有文件
      * @return 被删除的文件相对路径列表
      */
-    public List<String> deleteFolder(Long repoId, String folderPath) throws IOException, GitAPIException {
+    public List<String> deleteFolder(String deployCode, String spaceCode, String folderPath) throws IOException, GitAPIException {
         List<String> deletedFiles = new ArrayList<>();
-        File folder = new File(getRepoPath(repoId), folderPath);
+        File folder = new File(getRepoPath(deployCode, spaceCode), folderPath);
         if (!folder.exists() || !folder.isDirectory()) {
             return deletedFiles;
         }
 
         // 收集所有被删除的文件路径
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             try (Stream<Path> paths = Files.walk(folder.toPath())) {
                 paths.sorted(Comparator.reverseOrder())
                         .forEach(path -> {
                             File f = path.toFile();
                             if (f.isFile()) {
                                 // 计算相对路径
-                                String relativePath = getRepoPath(repoId);
+                                String relativePath = getRepoPath(deployCode, spaceCode);
                                 String rel = path.toFile().getAbsolutePath()
                                         .substring(relativePath.length() + 1)
                                         .replace("\\", "/");
@@ -229,10 +229,10 @@ public class GitService {
      * 重命名/移动文件夹
      * @return 受影响的文件旧路径与新路径对
      */
-    public List<String[]> renameFolder(Long repoId, String oldPath, String newPath) throws IOException, GitAPIException {
+    public List<String[]> renameFolder(String deployCode, String spaceCode, String oldPath, String newPath) throws IOException, GitAPIException {
         List<String[]> affectedFiles = new ArrayList<>();
-        File oldFolder = new File(getRepoPath(repoId), oldPath);
-        File newFolder = new File(getRepoPath(repoId), newPath);
+        File oldFolder = new File(getRepoPath(deployCode, spaceCode), oldPath);
+        File newFolder = new File(getRepoPath(deployCode, spaceCode), newPath);
 
         if (!oldFolder.exists() || !oldFolder.isDirectory()) {
             throw new IOException("Source folder does not exist: " + oldPath);
@@ -243,9 +243,9 @@ public class GitService {
             newFolder.mkdirs();
         }
 
-        String repoRoot = getRepoPath(repoId);
+        String repoRoot = getRepoPath(deployCode, spaceCode);
 
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             // 移动所有文件
             try (Stream<Path> paths = Files.walk(oldFolder.toPath())) {
                 List<Path> fileList = paths.filter(Files::isRegularFile).toList();
@@ -282,8 +282,8 @@ public class GitService {
     /**
      * 重命名/移动单个文件
      */
-    public void renameFile(Long repoId, String oldPath, String newPath) throws IOException, GitAPIException {
-        String repoRoot = getRepoPath(repoId);
+    public void renameFile(String deployCode, String spaceCode, String oldPath, String newPath) throws IOException, GitAPIException {
+        String repoRoot = getRepoPath(deployCode, spaceCode);
         File oldFile = new File(repoRoot, oldPath);
         File newFile = new File(repoRoot, newPath);
 
@@ -298,7 +298,7 @@ public class GitService {
 
         Files.move(oldFile.toPath(), newFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             try { git.rm().addFilepattern(oldPath).call(); } catch (Exception ignored) {}
             git.add().addFilepattern(newPath).call();
         }
@@ -307,8 +307,8 @@ public class GitService {
     /**
      * 重置暂存区（不改变工作区）
      */
-    public void resetStaged(Long repoId) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void resetStaged(String deployCode, String spaceCode) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.reset().call();
         }
     }
@@ -316,8 +316,8 @@ public class GitService {
     /**
      * 批量添加文件到暂存区
      */
-    public void addFiles(Long repoId, List<String> filePaths) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void addFiles(String deployCode, String spaceCode, List<String> filePaths) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             AddCommand add = git.add();
             for (String path : filePaths) {
                 add.addFilepattern(path);
@@ -329,8 +329,8 @@ public class GitService {
     /**
      * 批量从暂存区删除文件（用于 DELETE 类型变更）
      */
-    public void rmFiles(Long repoId, List<String> filePaths) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void rmFiles(String deployCode, String spaceCode, List<String> filePaths) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             RmCommand rm = git.rm();
             for (String path : filePaths) {
                 rm.addFilepattern(path);
@@ -342,10 +342,10 @@ public class GitService {
     /**
      * 提交当前暂存区的所有变更
      */
-    public String commitStaged(Long repoId, String message,
+    public String commitStaged(String deployCode, String spaceCode, String message,
                                String authorName, String authorEmail)
             throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             PersonIdent ident = new PersonIdent(authorName, authorEmail);
             RevCommit revCommit = git.commit()
                     .setAuthor(ident)
@@ -358,8 +358,8 @@ public class GitService {
     /**
      * 推送到远程仓库
      */
-    public void push(Long repoId) throws IOException, GitAPIException {
-        try (Git git = openRepo(repoId)) {
+    public void push(String deployCode, String spaceCode) throws IOException, GitAPIException {
+        try (Git git = openRepo(deployCode, spaceCode)) {
             git.push().call();
         }
     }

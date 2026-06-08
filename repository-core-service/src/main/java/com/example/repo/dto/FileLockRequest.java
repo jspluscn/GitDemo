@@ -7,7 +7,8 @@ import lombok.Data;
  */
 @Data
 public class FileLockRequest {
-    private Long repoId;
+    private String deployCode;  // 部署编码
+    private String spaceCode;   // 空间编码
     private String filePath;
     private Long userId;
 

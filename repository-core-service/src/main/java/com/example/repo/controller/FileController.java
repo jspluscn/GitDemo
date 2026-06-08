@@ -4,6 +4,8 @@ import com.example.repo.dto.ApiResponse;
 import com.example.repo.dto.CommitRequest;
 import com.example.repo.dto.FileLockRequest;
 import com.example.repo.dto.FileOperationRequest;
+import com.example.repo.dto.PageRequest;
+import com.example.repo.dto.PageResponse;
 import com.example.repo.entity.FileChange;
 import com.example.repo.entity.FileIndex;
 import com.example.repo.entity.FileLock;
@@ -71,11 +73,11 @@ public class FileController {
      * 返回变更记录（不执行 git commit）
      */
     @DeleteMapping("/delete")
-    public ApiResponse<FileChange> delete(@RequestParam Long repoId,
+    public ApiResponse<FileChange> delete(@RequestParam String deployCode,@RequestParam String spaceCode,
                                           @RequestParam String filePath,
                                           @RequestParam String operator) {
         try {
-            FileChange change = fileService.deleteFileOrFolder(repoId, filePath, operator);
+            FileChange change = fileService.deleteFileOrFolder(deployCode, spaceCode, filePath, operator);
             return ApiResponse.success(change);
         } catch (Exception e) {
             return ApiResponse.error(409, e.getMessage());
@@ -85,14 +87,42 @@ public class FileController {
     // ======================== 查看变更 & 提交推送 ========================
 
     /**
-     * 查看仓库的所有未提交变更
+     * 查看仓库的所有未提交变更（不分页）
      * 返回变更列表，包含文件路径、变更类型（ADD/MODIFY/DELETE）
      */
     @GetMapping("/changes")
-    public ApiResponse<List<FileChange>> getPendingChanges(@RequestParam Long repoId) {
+    public ApiResponse<List<FileChange>> getPendingChanges(@RequestParam String deployCode,@RequestParam String spaceCode) {
         try {
-            List<FileChange> changes = fileService.getPendingChanges(repoId);
+            List<FileChange> changes = fileService.getPendingChanges(deployCode, spaceCode);
             return ApiResponse.success(changes);
+        } catch (Exception e) {
+            return ApiResponse.error(500, e.getMessage());
+        }
+    }
+
+    /**
+     * 分页查看仓库的未提交变更（按目录树状排序）
+     * 支持分页和目录树导航，文件夹优先显示
+     * 
+     * @param deployCode, spaceCode 仓库ID
+     * @param pageNum 页码（从1开始，默认1）
+     * @param pageSize 每页大小（默认20）
+     * @param parentPath 父目录路径（可选，用于浏览特定目录）
+     */
+    @GetMapping("/changes/page")
+    public ApiResponse<PageResponse> getPendingChangesWithPage(
+            @RequestParam String deployCode,@RequestParam String spaceCode,
+            @RequestParam(required = false, defaultValue = "1") Integer pageNum,
+            @RequestParam(required = false, defaultValue = "20") Integer pageSize,
+            @RequestParam(required = false) String parentPath) {
+        try {
+            PageRequest pageRequest = new PageRequest();
+            pageRequest.setPageNum(pageNum);
+            pageRequest.setPageSize(pageSize);
+            pageRequest.setParentPath(parentPath);
+            
+            PageResponse response = fileService.getPendingChangesWithPage(deployCode, spaceCode, pageRequest);
+            return ApiResponse.success(response);
         } catch (Exception e) {
             return ApiResponse.error(500, e.getMessage());
         }
@@ -120,10 +150,10 @@ public class FileController {
      * 获取文件列表
      */
     @GetMapping("/list")
-    public ApiResponse<List<FileIndex>> listFiles(@RequestParam Long repoId,
+    public ApiResponse<List<FileIndex>> listFiles(@RequestParam String deployCode,@RequestParam String spaceCode,
                                                    @RequestParam(required = false) String parentPath) {
         try {
-            List<FileIndex> files = fileService.getFileList(repoId, parentPath);
+            List<FileIndex> files = fileService.getFileList(deployCode, spaceCode, parentPath);
             return ApiResponse.success(files);
         } catch (Exception e) {
             return ApiResponse.error(500, e.getMessage());
@@ -134,10 +164,10 @@ public class FileController {
      * 获取文件历史
      */
     @GetMapping("/history")
-    public ApiResponse<List<GitService.CommitInfo>> getFileHistory(@RequestParam Long repoId,
+    public ApiResponse<List<GitService.CommitInfo>> getFileHistory(@RequestParam String deployCode,@RequestParam String spaceCode,
                                                                     @RequestParam String filePath) {
         try {
-            List<GitService.CommitInfo> history = fileService.getFileHistory(repoId, filePath);
+            List<GitService.CommitInfo> history = fileService.getFileHistory(deployCode, spaceCode, filePath);
             return ApiResponse.success(history);
         } catch (Exception e) {
             return ApiResponse.error(500, e.getMessage());
@@ -148,11 +178,11 @@ public class FileController {
      * 读取文件内容
      */
     @GetMapping("/content")
-    public ApiResponse<String> readFileContent(@RequestParam Long repoId,
+    public ApiResponse<String> readFileContent(@RequestParam String deployCode,@RequestParam String spaceCode,
                                                 @RequestParam String filePath,
                                                 @RequestParam(required = false) String commitHash) {
         try {
-            String content = gitService.readFileContent(repoId, filePath, commitHash);
+            String content = gitService.readFileContent(deployCode, spaceCode, filePath, commitHash);
             return ApiResponse.success(content != null ? content : "");
         } catch (Exception e) {
             return ApiResponse.error(500, e.getMessage());
@@ -195,10 +225,10 @@ public class FileController {
      * 返回是否被锁定、锁持有者、过期时间等信息
      */
     @GetMapping("/lock/status")
-    public ApiResponse<Map<String, Object>> getLockStatus(@RequestParam Long repoId,
+    public ApiResponse<Map<String, Object>> getLockStatus(@RequestParam String deployCode,@RequestParam String spaceCode,
                                                            @RequestParam String filePath) {
         try {
-            Map<String, Object> status = fileService.getEditLockStatus(repoId, filePath);
+            Map<String, Object> status = fileService.getEditLockStatus(deployCode, spaceCode, filePath);
             return ApiResponse.success(status);
         } catch (Exception e) {
             return ApiResponse.error(500, e.getMessage());

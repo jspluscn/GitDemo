@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.repo.mapper.FileChangeMapper">
+
+    <!-- 分页查询未提交变更（支持目录过滤和排序） -->
+    <select id="selectPendingChangesWithPage" resultType="com.example.repo.entity.FileChange">
+        SELECT * FROM t_file_change
+        WHERE deploy_code = #{deployCode}
+          AND space_code = #{spaceCode}
+          AND committed = 0
+        <if test="parentPath != null and parentPath != ''">
+            AND (
+                file_path = #{parentPath}
+                OR (
+                    file_path LIKE CONCAT(#{parentPath}, '/%')
+                    AND LOCATE('/', SUBSTRING(file_path, LENGTH(#{parentPath}) + 2)) = 0
+                )
+            )
+        </if>
+        ORDER BY
+            CASE WHEN file_path LIKE '%/.gitkeep' THEN 1 ELSE 0 END ASC,
+            CASE WHEN file_path LIKE '%/' THEN 0 ELSE 1 END,
+            SUBSTRING_INDEX(file_path, '/', -1) ASC
+    </select>
+
+    <!-- 批量查询文件类型（用于判断是否为文件夹） -->
+    <select id="selectFileTypes" resultType="com.example.repo.mapper.FileChangeMapper$FileTypeResult">
+        SELECT file_path, file_type
+        FROM t_file_index
+        WHERE deploy_code = #{deployCode}
+          AND space_code = #{spaceCode}
+          AND is_deleted = 0
+          AND file_path IN
+        <foreach collection="filePaths" item="path" open="(" separator="," close=")">
+            #{path}
+        </foreach>
+    </select>
+
+</mapper>

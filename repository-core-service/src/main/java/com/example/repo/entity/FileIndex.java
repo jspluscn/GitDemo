@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 public class FileIndex {
     @TableId(type = IdType.AUTO)
     private Long id;
-    private Long repoId;
+    private String deployCode;  // 部署编码
+    private String spaceCode;   // 空间编码
     private String filePath;
     private Integer fileType; // 1-文件，2-文件夹
     private Long fileSize;
@@ -19,8 +20,10 @@ public class FileIndex {
     private Integer version;
     @TableLogic
     private Integer isDeleted;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    private LocalDateTime createDate;
+    private LocalDateTime lastUpdatedDate;
+    @TableField(exist = false)
     private Long createdBy;
+    @TableField(exist = false)
     private Long updatedBy;
 }

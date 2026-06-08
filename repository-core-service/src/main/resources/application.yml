@@ -27,7 +27,7 @@ spring:
 repo:
   storage:
     nas-base-path: /git-repositories
-    health-check-interval: 60000 # 健康检查间隔 (ms)
+    # 健康检查间隔 (ms)
 
 # MyBatis Plus 配置
 mybatis-plus:

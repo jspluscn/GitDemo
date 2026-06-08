@@ -1,9 +1,13 @@
 package com.example.repo.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.repo.dto.CommitRequest;
 import com.example.repo.dto.FileLockRequest;
 import com.example.repo.dto.FileOperationRequest;
+import com.example.repo.dto.PageRequest;
+import com.example.repo.dto.PageResponse;
 import com.example.repo.entity.FileChange;
 import com.example.repo.entity.FileIndex;
 import com.example.repo.entity.FileLock;
@@ -15,7 +19,6 @@ import com.example.repo.mapper.FileChangeMapper;
 import com.example.repo.mapper.FileIndexMapper;
 import com.example.repo.mapper.FileLockMapper;
 import com.example.repo.mapper.UserMapper;
-import com.example.repo.nas.NasHealthChecker;
 import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -57,9 +60,6 @@ public class FileCollaborationService {
     @Autowired
     private UserMapper userMapper;
 
-    @Autowired
-    private NasHealthChecker nasHealthChecker;
-
     // ======================== 创建 ========================
 
     /**
@@ -68,47 +68,44 @@ public class FileCollaborationService {
      */
     @Transactional
     public FileChange createFileOrFolder(FileOperationRequest request) {
-        if (!nasHealthChecker.isHealthy()) {
-            throw new RuntimeException("NAS storage is currently unavailable");
-        }
-
-        Long repoId = request.getRepoId();
+        String deployCode = request.getDeployCode();
+        String spaceCode = request.getSpaceCode();
         String filePath = request.getFilePath();
         String operator = request.getOperator();
         int fileType = request.getFileType() != null ? request.getFileType() : FILE_TYPE_FILE;
 
         User user = findUserByUsername(operator);
 
-        FileIndex existing = findFileIndex(repoId, filePath);
+        FileIndex existing = findFileIndex(deployCode, spaceCode, filePath);
         if (existing != null) {
             throw new RuntimeException((fileType == FILE_TYPE_FOLDER ? "Folder" : "File")
                     + " already exists: " + filePath);
         }
 
-        RLock fileLock = lockManager.tryGetFileLock(repoId, filePath, 3, 30);
+        RLock fileLock = lockManager.tryGetFileLock(deployCode, spaceCode, filePath, 3, 30);
         if (fileLock == null) {
             throw new RuntimeException("Operation is currently in progress by another user");
         }
 
         try {
-            RLock repoLock = lockManager.tryGetRepoLock(repoId, 5, 60);
+            RLock repoLock = lockManager.tryGetRepoLock(deployCode, spaceCode, 5, 60);
             if (repoLock == null) {
                 throw new RuntimeException("Repository is currently busy, please try again later");
             }
 
             try {
                 if (fileType == FILE_TYPE_FOLDER) {
-                    gitService.createFolder(repoId, filePath);
-                    createFileIndex(repoId, filePath, FILE_TYPE_FOLDER, 0L, user.getId());
+                    gitService.createFolder(deployCode, spaceCode, filePath);
+                    createFileIndex(deployCode, spaceCode, filePath, FILE_TYPE_FOLDER, 0L, user.getId());
                 } else {
                     String content = request.getContent() != null ? request.getContent() : "";
-                    gitService.writeFileContent(repoId, filePath, content);
-                    createFileIndex(repoId, filePath, FILE_TYPE_FILE,
+                    gitService.writeFileContent(deployCode, spaceCode, filePath, content);
+                    createFileIndex(deployCode, spaceCode, filePath, FILE_TYPE_FILE,
                             (long) content.getBytes().length, user.getId());
                 }
 
                 // 记录变更（不提交）
-                return recordChange(repoId, filePath, "ADD", null, user.getId());
+                return recordChange(deployCode, spaceCode, filePath, "ADD", null, user.getId());
 
             } finally {
                 lockManager.releaseLock(repoLock);
@@ -131,17 +128,14 @@ public class FileCollaborationService {
      */
     @Transactional
     public FileChange updateFileOrFolder(FileOperationRequest request) {
-        if (!nasHealthChecker.isHealthy()) {
-            throw new RuntimeException("NAS storage is currently unavailable");
-        }
-
-        Long repoId = request.getRepoId();
+        String deployCode = request.getDeployCode();
+        String spaceCode = request.getSpaceCode();
         String filePath = request.getFilePath();
         String operator = request.getOperator();
 
         User user = findUserByUsername(operator);
 
-        FileIndex fileIndex = findFileIndex(repoId, filePath);
+        FileIndex fileIndex = findFileIndex(deployCode, spaceCode, filePath);
         if (fileIndex == null) {
             throw new RuntimeException("File or folder not found: " + filePath);
         }
@@ -153,36 +147,36 @@ public class FileCollaborationService {
         if (expectedVersion != null && !expectedVersion.equals(fileIndex.getVersion())) {
             throw new ConflictException(
                     "File conflict detected: file '" + filePath + "' has been modified by another user " +
-                    "(expected version " + expectedVersion + ", current version " + fileIndex.getVersion() + "). " +
-                    "Please reload the file and retry.");
+                            "(expected version " + expectedVersion + ", current version " + fileIndex.getVersion() + "). " +
+                            "Please reload the file and retry.");
         }
 
         // 编辑锁校验：检查是否有其他用户正在编辑此文件
-        FileLock editLock = findActiveEditLock(repoId, filePath);
+        FileLock editLock = findActiveEditLock(deployCode, spaceCode, filePath);
         if (editLock != null && !editLock.getUserId().equals(user.getId())) {
             User lockOwner = userMapper.selectById(editLock.getUserId());
             String lockOwnerName = lockOwner != null ? lockOwner.getUsername() : "unknown";
             throw new RuntimeException(
                     "File '" + filePath + "' is currently being edited by user '" + lockOwnerName + "'. " +
-                    "Please wait until they finish or the lock expires.");
+                            "Please wait until they finish or the lock expires.");
         }
 
-        RLock fileLock = lockManager.tryGetFileLock(repoId, filePath, 3, 30);
+        RLock fileLock = lockManager.tryGetFileLock(deployCode, spaceCode, filePath, 3, 30);
         if (fileLock == null) {
             throw new RuntimeException("File or folder is currently locked by another user");
         }
 
         try {
-            RLock repoLock = lockManager.tryGetRepoLock(repoId, 5, 60);
+            RLock repoLock = lockManager.tryGetRepoLock(deployCode, spaceCode, 5, 60);
             if (repoLock == null) {
                 throw new RuntimeException("Repository is currently busy, please try again later");
             }
 
             try {
                 if (fileType == FILE_TYPE_FOLDER) {
-                    return updateFolder(repoId, filePath, request, user);
+                    return updateFolder(deployCode, spaceCode, filePath, request, user);
                 } else {
-                    return updateFileContent(repoId, filePath, request, user, fileIndex);
+                    return updateFileContent(deployCode, spaceCode, filePath, request, user, fileIndex);
                 }
 
             } finally {
@@ -201,7 +195,7 @@ public class FileCollaborationService {
     /**
      * 更新文件内容（不提交）
      */
-    private FileChange updateFileContent(Long repoId, String filePath,
+    private FileChange updateFileContent(String deployCode, String spaceCode, String filePath,
                                          FileOperationRequest request,
                                          User user, FileIndex fileIndex) throws Exception {
         String content = request.getContent();
@@ -216,13 +210,13 @@ public class FileCollaborationService {
 
         if (newPath != null && !newPath.equals(filePath)) {
             // 重命名/移动文件
-            gitService.renameFile(repoId, filePath, newPath);
+            gitService.renameFile(deployCode, spaceCode, filePath, newPath);
             fileIndex.setFilePath(newPath);
             recordedNewPath = newPath;
 
             // 同时更新内容
             if (content != null) {
-                gitService.writeFileContent(repoId, newPath, content);
+                gitService.writeFileContent(deployCode, spaceCode, newPath, content);
                 fileIndex.setFileSize((long) content.getBytes().length);
             }
         } else {
@@ -230,23 +224,23 @@ public class FileCollaborationService {
             if (content == null) {
                 throw new RuntimeException("Content cannot be null for file update without rename");
             }
-            gitService.writeFileContent(repoId, filePath, content);
+            gitService.writeFileContent(deployCode, spaceCode, filePath, content);
             fileIndex.setFileSize((long) content.getBytes().length);
         }
 
         fileIndex.setVersion(fileIndex.getVersion() + 1);
         fileIndex.setUpdatedBy(user.getId());
-        fileIndex.setUpdatedAt(LocalDateTime.now());
+        fileIndex.setLastUpdatedDate(LocalDateTime.now());
         fileIndexMapper.updateById(fileIndex);
 
         String recordPath = (recordedNewPath != null) ? filePath : filePath;
-        return recordChange(repoId, recordPath, changeType, recordedNewPath, user.getId());
+        return recordChange(deployCode, spaceCode, recordPath, changeType, recordedNewPath, user.getId());
     }
 
     /**
      * 更新文件夹（重命名/移动，不提交）
      */
-    private FileChange updateFolder(Long repoId, String folderPath,
+    private FileChange updateFolder(String deployCode, String spaceCode, String folderPath,
                                     FileOperationRequest request,
                                     User user) throws Exception {
         String newPath = request.getNewPath();
@@ -257,37 +251,37 @@ public class FileCollaborationService {
             throw new RuntimeException("New path must be different from current path");
         }
 
-        FileIndex existingTarget = findFileIndex(repoId, newPath);
+        FileIndex existingTarget = findFileIndex(deployCode, spaceCode, newPath);
         if (existingTarget != null) {
             throw new RuntimeException("Target path already exists: " + newPath);
         }
 
-        List<String[]> affectedFiles = gitService.renameFolder(repoId, folderPath, newPath);
+        List<String[]> affectedFiles = gitService.renameFolder(deployCode, spaceCode, folderPath, newPath);
 
         // 更新文件夹本身的索引
-        FileIndex folderIndex = findFileIndex(repoId, folderPath);
+        FileIndex folderIndex = findFileIndex(deployCode, spaceCode, folderPath);
         if (folderIndex != null) {
             folderIndex.setFilePath(newPath);
             folderIndex.setVersion(folderIndex.getVersion() + 1);
             folderIndex.setUpdatedBy(user.getId());
-            folderIndex.setUpdatedAt(LocalDateTime.now());
+            folderIndex.setLastUpdatedDate(LocalDateTime.now());
             fileIndexMapper.updateById(folderIndex);
         }
 
         // 更新子项索引
         for (String[] pair : affectedFiles) {
             if (pair[0].endsWith(".gitkeep")) continue;
-            FileIndex childIndex = findFileIndex(repoId, pair[0]);
+            FileIndex childIndex = findFileIndex(deployCode, spaceCode, pair[0]);
             if (childIndex != null) {
                 childIndex.setFilePath(pair[1]);
                 childIndex.setVersion(childIndex.getVersion() + 1);
                 childIndex.setUpdatedBy(user.getId());
-                childIndex.setUpdatedAt(LocalDateTime.now());
+                childIndex.setLastUpdatedDate(LocalDateTime.now());
                 fileIndexMapper.updateById(childIndex);
             }
         }
 
-        return recordChange(repoId, folderPath, "MODIFY", newPath, user.getId());
+        return recordChange(deployCode, spaceCode, folderPath, "MODIFY", newPath, user.getId());
     }
 
     // ======================== 删除 ========================
@@ -297,14 +291,10 @@ public class FileCollaborationService {
      * 仅删除磁盘文件 + 标记索引 + 记录变更，不执行 git commit
      */
     @Transactional
-    public FileChange deleteFileOrFolder(Long repoId, String filePath, String operator) {
-        if (!nasHealthChecker.isHealthy()) {
-            throw new RuntimeException("NAS storage is currently unavailable");
-        }
-
+    public FileChange deleteFileOrFolder(String deployCode, String spaceCode, String filePath, String operator) {
         User user = findUserByUsername(operator);
 
-        FileIndex fileIndex = findFileIndex(repoId, filePath);
+        FileIndex fileIndex = findFileIndex(deployCode, spaceCode, filePath);
         if (fileIndex == null) {
             throw new RuntimeException("File or folder not found: " + filePath);
         }
@@ -312,46 +302,46 @@ public class FileCollaborationService {
         int fileType = fileIndex.getFileType();
 
         // 编辑锁校验：检查是否有其他用户正在编辑此文件
-        FileLock editLock = findActiveEditLock(repoId, filePath);
+        FileLock editLock = findActiveEditLock(deployCode, spaceCode, filePath);
         if (editLock != null && !editLock.getUserId().equals(user.getId())) {
             User lockOwner = userMapper.selectById(editLock.getUserId());
             String lockOwnerName = lockOwner != null ? lockOwner.getUsername() : "unknown";
             throw new RuntimeException(
                     "File '" + filePath + "' is currently being edited by user '" + lockOwnerName + "'. " +
-                    "Please wait until they finish or the lock expires.");
+                            "Please wait until they finish or the lock expires.");
         }
 
-        RLock fileLock = lockManager.tryGetFileLock(repoId, filePath, 3, 30);
+        RLock fileLock = lockManager.tryGetFileLock(deployCode, spaceCode, filePath, 3, 30);
         if (fileLock == null) {
             throw new RuntimeException("File or folder is currently locked by another user");
         }
 
         try {
-            RLock repoLock = lockManager.tryGetRepoLock(repoId, 5, 60);
+            RLock repoLock = lockManager.tryGetRepoLock(deployCode, spaceCode, 5, 60);
             if (repoLock == null) {
                 throw new RuntimeException("Repository is currently busy, please try again later");
             }
 
             try {
                 if (fileType == FILE_TYPE_FOLDER) {
-                    deleteFolderPhysical(repoId, user, filePath);
+                    deleteFolderPhysical(deployCode, spaceCode, user, filePath);
                 } else {
-                    deleteFilePhysical(repoId, filePath);
+                    deleteFilePhysical(deployCode, spaceCode, filePath);
                 }
 
                 // 标记为已删除
                 fileIndex.setIsDeleted(1);
                 fileIndex.setVersion(fileIndex.getVersion() + 1);
                 fileIndex.setUpdatedBy(user.getId());
-                fileIndex.setUpdatedAt(LocalDateTime.now());
+                fileIndex.setLastUpdatedDate(LocalDateTime.now());
                 fileIndexMapper.updateById(fileIndex);
 
                 // 文件夹子项也标记删除
                 if (fileType == FILE_TYPE_FOLDER) {
-                    markChildrenDeleted(repoId, filePath, user.getId());
+                    markChildrenDeleted(deployCode, spaceCode, filePath, user.getId());
                 }
 
-                return recordChange(repoId, filePath, "DELETE", null, user.getId());
+                return recordChange(deployCode, spaceCode, filePath, "DELETE", null, user.getId());
 
             } finally {
                 lockManager.releaseLock(repoLock);
@@ -366,24 +356,31 @@ public class FileCollaborationService {
         }
     }
 
-    /** 物理删除单个文件 */
-    private void deleteFilePhysical(Long repoId, String filePath) throws Exception {
-        java.io.File file = new java.io.File(gitService.getRepoPath(repoId), filePath);
+    /**
+     * 物理删除单个文件
+     */
+    private void deleteFilePhysical(String deployCode, String spaceCode, String filePath) throws Exception {
+        java.io.File file = new java.io.File(gitService.getRepoPath(deployCode, spaceCode), filePath);
         if (file.exists()) {
             file.delete();
         }
     }
 
-    /** 物理删除文件夹及其下所有文件 */
-    private void deleteFolderPhysical(Long repoId, User user, String folderPath) throws Exception {
-        gitService.deleteFolder(repoId, folderPath);
+    /**
+     * 物理删除文件夹及其下所有文件
+     */
+    private void deleteFolderPhysical(String deployCode, String spaceCode, User user, String folderPath) throws Exception {
+        gitService.deleteFolder(deployCode, spaceCode, folderPath);
     }
 
-    /** 将文件夹子项索引标记为已删除 */
-    private void markChildrenDeleted(Long repoId, String folderPath, Long userId) {
+    /**
+     * 将文件夹子项索引标记为已删除
+     */
+    private void markChildrenDeleted(String deployCode, String spaceCode, String folderPath, Long userId) {
         List<FileIndex> children = fileIndexMapper.selectList(
                 new LambdaQueryWrapper<FileIndex>()
-                        .eq(FileIndex::getRepoId, repoId)
+                        .eq(FileIndex::getDeployCode, deployCode)
+                        .eq(FileIndex::getSpaceCode, spaceCode)
                         .eq(FileIndex::getIsDeleted, 0)
                         .likeRight(FileIndex::getFilePath, folderPath + "/")
         );
@@ -391,7 +388,7 @@ public class FileCollaborationService {
             child.setIsDeleted(1);
             child.setVersion(child.getVersion() + 1);
             child.setUpdatedBy(userId);
-            child.setUpdatedAt(LocalDateTime.now());
+            child.setLastUpdatedDate(LocalDateTime.now());
             fileIndexMapper.updateById(child);
         }
     }
@@ -401,13 +398,211 @@ public class FileCollaborationService {
     /**
      * 获取仓库的所有未提交变更
      */
-    public List<FileChange> getPendingChanges(Long repoId) {
+    public List<FileChange> getPendingChanges(String deployCode, String spaceCode) {
         return fileChangeMapper.selectList(
                 new LambdaQueryWrapper<FileChange>()
-                        .eq(FileChange::getRepoId, repoId)
+                        .eq(FileChange::getDeployCode, deployCode)
+                        .eq(FileChange::getSpaceCode, spaceCode)
                         .eq(FileChange::getCommitted, 0)
-                        .orderByDesc(FileChange::getCreatedAt)
+                        .orderByDesc(FileChange::getCreateDate)
         );
+    }
+
+    /**
+     * 分页获取仓库的未提交变更（按目录树状排序）
+     * 优化版本：使用数据库分页和排序，减少内存计算
+     */
+    public PageResponse getPendingChangesWithPage(String deployCode, String spaceCode, PageRequest pageRequest) {
+        int pageNum = pageRequest.getPageNum() != null ? pageRequest.getPageNum() : 1;
+        int pageSize = pageRequest.getPageSize() != null ? pageRequest.getPageSize() : 20;
+        String parentPath = pageRequest.getParentPath();
+        
+        // 1. 使用数据库分页查询（直接在SQL中过滤和排序）
+        Page<FileChange> page = new Page<>(pageNum, pageSize);
+        IPage<FileChange> resultPage = fileChangeMapper.selectPendingChangesWithPage(
+                deployCode, spaceCode, parentPath, page
+        );
+        
+        List<FileChange> pagedChanges = resultPage.getRecords();
+        long total = resultPage.getTotal();
+        
+        if (pagedChanges.isEmpty()) {
+            PageResponse response = new PageResponse();
+            response.setRecords(new ArrayList<>());
+            response.setTotal(total);
+            response.setPageNum(pageNum);
+            response.setPageSize(pageSize);
+            response.setTotalPages(0);
+            return response;
+        }
+        
+        // 2. 批量查询文件类型（避免N+1查询）
+        List<String> filePaths = pagedChanges.stream()
+                .map(FileChange::getFilePath)
+                .collect(Collectors.toList());
+        
+        Map<String, Integer> fileTypeMap = buildFileTypeMap(deployCode, spaceCode, filePaths);
+        
+        // 3. 转换为树状节点
+        List<PageResponse.FileChangeNode> nodes = pagedChanges.stream()
+                .map(change -> convertToFileChangeNodeOptimized(change, fileTypeMap))
+                .collect(Collectors.toList());
+        
+        // 4. 构建分页响应
+        int totalPages = (int) Math.ceil((double) total / pageSize);
+        
+        PageResponse response = new PageResponse();
+        response.setRecords(nodes);
+        response.setTotal(total);
+        response.setPageNum(pageNum);
+        response.setPageSize(pageSize);
+        response.setTotalPages(totalPages);
+        
+        return response;
+    }
+
+    /**
+     * 将FileChange转换为树状节点（优化版，使用预加载的文件类型Map）
+     */
+    private PageResponse.FileChangeNode convertToFileChangeNodeOptimized(FileChange change, Map<String, Integer> fileTypeMap) {
+        PageResponse.FileChangeNode node = new PageResponse.FileChangeNode();
+        node.setId(change.getId());
+        node.setName(getFileName(change.getFilePath()));
+        node.setFilePath(change.getFilePath());
+        node.setChangeType(change.getChangeType());
+        node.setNewPath(change.getNewPath());
+        node.setOperatorId(change.getOperatorId());
+        node.setCreatedAt(change.getCreateDate());
+
+        // 从预加载的Map中获取文件类型，避免N+1查询
+        Integer fileType = fileTypeMap.get(change.getFilePath());
+        boolean isFolder = fileType != null && fileType == FILE_TYPE_FOLDER;
+        if (!isFolder) {
+            // 如果FileIndex中没有，尝试根据路径特征判断
+            isFolder = change.getFilePath().endsWith("/");
+        }
+        node.setIsFolder(isFolder);
+
+        // 如果是文件夹，查询其直接子项变更
+        if (isFolder) {
+            List<PageResponse.FileChangeNode> children = getDirectChildrenChanges(change.getDeployCode(), change.getSpaceCode(), change.getFilePath());
+            node.setChildren(children.isEmpty() ? null : children);
+        }
+
+        return node;
+    }
+    
+    /**
+     * 批量构建文件类型映射表
+     */
+    private Map<String, Integer> buildFileTypeMap(String deployCode, String spaceCode, List<String> filePaths) {
+        if (filePaths == null || filePaths.isEmpty()) {
+            return new HashMap<>();
+        }
+        
+        List<FileChangeMapper.FileTypeResult> results = fileChangeMapper.selectFileTypes(deployCode, spaceCode, filePaths);
+        Map<String, Integer> fileTypeMap = new HashMap<>();
+        
+        for (FileChangeMapper.FileTypeResult result : results) {
+            fileTypeMap.put(result.getFilePath(), result.getFileType());
+        }
+        
+        return fileTypeMap;
+    }
+
+    /**
+     * 将FileChange转换为树状节点（旧版本，保留用于兼容）
+     * @deprecated 请使用 convertToFileChangeNodeOptimized
+     */
+    @Deprecated
+    private PageResponse.FileChangeNode convertToFileChangeNode(FileChange change) {
+        PageResponse.FileChangeNode node = new PageResponse.FileChangeNode();
+        node.setId(change.getId());
+        node.setName(getFileName(change.getFilePath()));
+        node.setFilePath(change.getFilePath());
+        node.setChangeType(change.getChangeType());
+        node.setNewPath(change.getNewPath());
+        node.setOperatorId(change.getOperatorId());
+        node.setCreatedAt(change.getCreateDate());
+
+        boolean isFolder = isFolderChange(change);
+        node.setIsFolder(isFolder);
+
+        // 如果是文件夹，查询其直接子项变更
+        if (isFolder) {
+            List<PageResponse.FileChangeNode> children = getDirectChildrenChanges(change.getDeployCode(), change.getSpaceCode(), change.getFilePath());
+            node.setChildren(children.isEmpty() ? null : children);
+        }
+
+        return node;
+    }
+
+    /**
+     * 判断变更是否为文件夹
+     */
+    private boolean isFolderChange(FileChange change) {
+        // 查询FileIndex判断是否为文件夹
+        FileIndex fileIndex = findFileIndex(change.getDeployCode(), change.getSpaceCode(), change.getFilePath());
+        if (fileIndex != null) {
+            return fileIndex.getFileType() == FILE_TYPE_FOLDER;
+        }
+
+        // 如果文件已被删除，尝试根据路径特征判断
+        return change.getFilePath().endsWith("/");
+    }
+
+    /**
+     * 获取文件夹的直接子项变更
+     */
+    private List<PageResponse.FileChangeNode> getDirectChildrenChanges(String deployCode, String spaceCode, String folderPath) {
+        List<FileChange> childrenChanges = fileChangeMapper.selectList(
+                new LambdaQueryWrapper<FileChange>()
+                        .eq(FileChange::getDeployCode, deployCode)
+                        .eq(FileChange::getSpaceCode, spaceCode)
+                        .eq(FileChange::getCommitted, 0)
+        );
+
+        String prefix = folderPath.endsWith("/") ? folderPath : folderPath + "/";
+
+        return childrenChanges.stream()
+                .filter(change -> {
+                    String filePath = change.getFilePath();
+                    if (!filePath.startsWith(prefix)) {
+                        return false;
+                    }
+                    // 确保是直接子项
+                    String relativePath = filePath.substring(prefix.length());
+                    return !relativePath.contains("/");
+                })
+                .sorted((c1, c2) -> {
+                    String name1 = getFileName(c1.getFilePath());
+                    String name2 = getFileName(c2.getFilePath());
+
+                    boolean isFolder1 = isFolderChange(c1);
+                    boolean isFolder2 = isFolderChange(c2);
+
+                    if (isFolder1 && !isFolder2) return -1;
+                    if (!isFolder1 && isFolder2) return 1;
+
+                    return name1.compareToIgnoreCase(name2);
+                })
+                .map(change -> convertToFileChangeNodeOptimized(change, buildFileTypeMap(deployCode, spaceCode, 
+                        childrenChanges.stream().map(FileChange::getFilePath).collect(Collectors.toList()))))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 从文件路径中提取文件名
+     */
+    private String getFileName(String filePath) {
+        if (filePath == null || filePath.isEmpty()) {
+            return "";
+        }
+        int lastSlashIndex = filePath.lastIndexOf("/");
+        if (lastSlashIndex >= 0) {
+            return filePath.substring(lastSlashIndex + 1);
+        }
+        return filePath;
     }
 
     // ======================== 提交推送 ========================
@@ -418,113 +613,118 @@ public class FileCollaborationService {
      */
     @Transactional
     public String commitAndPush(CommitRequest request) {
-        Long repoId = request.getRepoId();
+        String deployCode = request.getDeployCode();
+        String spaceCode = request.getSpaceCode();
         User user = findUserByUsername(request.getOperator());
 
         // 提交阶段需要获取仓库级锁，防止并发 commit 导致 Git 状态异常
-        RLock repoLock = lockManager.tryGetRepoLock(repoId, 10, 120);
+        RLock repoLock = lockManager.tryGetRepoLock(deployCode, spaceCode, 10, 120);
         if (repoLock == null) {
             throw new RuntimeException("Repository is currently busy with another commit, please try again later");
         }
 
         try {
 
-        // 查询待提交的变更
-        List<FileChange> changes;
-        if (request.getSelectedChangeIds() != null && !request.getSelectedChangeIds().isEmpty()) {
-            changes = fileChangeMapper.selectList(
-                    new LambdaQueryWrapper<FileChange>()
-                            .eq(FileChange::getRepoId, repoId)
-                            .eq(FileChange::getCommitted, 0)
-                            .in(FileChange::getId, request.getSelectedChangeIds())
-            );
-        } else {
-            changes = getPendingChanges(repoId);
-        }
+            // 查询待提交的变更
+            List<FileChange> changes;
+            if (request.getSelectedChangeIds() != null && !request.getSelectedChangeIds().isEmpty()) {
+                changes = fileChangeMapper.selectList(
+                        new LambdaQueryWrapper<FileChange>()
+                                .eq(FileChange::getDeployCode, deployCode)
+                                .eq(FileChange::getSpaceCode, spaceCode)
+                                .eq(FileChange::getCommitted, 0)
+                                .in(FileChange::getId, request.getSelectedChangeIds())
+                );
+            } else {
+                changes = getPendingChanges(deployCode, spaceCode);
+            }
 
-        if (changes.isEmpty()) {
-            throw new RuntimeException("No pending changes to commit");
-        }
+            if (changes.isEmpty()) {
+                throw new RuntimeException("No pending changes to commit");
+            }
 
-        try {
-            // 1. 重置暂存区（避免混入非预期的已暂存文件）
-            gitService.resetStaged(repoId);
+            try {
+                // 1. 重置暂存区（避免混入非预期的已暂存文件）
+                gitService.resetStaged(deployCode, spaceCode);
 
-            // 2. 按变更类型分别暂存
-            List<String> addPaths = new ArrayList<>();
-            List<String> rmPaths = new ArrayList<>();
+                // 2. 按变更类型分别暂存
+                List<String> addPaths = new ArrayList<>();
+                List<String> rmPaths = new ArrayList<>();
 
-            for (FileChange change : changes) {
-                switch (change.getChangeType()) {
-                    case "ADD", "MODIFY" -> {
-                        addPaths.add(change.getFilePath());
-                        if (change.getNewPath() != null) {
-                            // 重命名：旧路径 rm，新路径 add
-                            rmPaths.add(change.getFilePath());
-                            addPaths.add(change.getNewPath());
-                            addPaths.remove(change.getFilePath());
+                for (FileChange change : changes) {
+                    switch (change.getChangeType()) {
+                        case "ADD", "MODIFY" -> {
+                            addPaths.add(change.getFilePath());
+                            if (change.getNewPath() != null) {
+                                // 重命名：旧路径 rm，新路径 add
+                                rmPaths.add(change.getFilePath());
+                                addPaths.add(change.getNewPath());
+                                addPaths.remove(change.getFilePath());
+                            }
                         }
+                        case "DELETE" -> rmPaths.add(change.getFilePath());
                     }
-                    case "DELETE" -> rmPaths.add(change.getFilePath());
                 }
+
+                if (!addPaths.isEmpty()) {
+                    gitService.addFiles(deployCode, spaceCode, addPaths);
+                }
+                if (!rmPaths.isEmpty()) {
+                    gitService.rmFiles(deployCode, spaceCode, rmPaths);
+                }
+
+                // 3. 提交
+                String commitMsg = request.getCommitMessage();
+                if (commitMsg == null || commitMsg.isEmpty()) {
+                    commitMsg = "Commit " + changes.size() + " change(s)";
+                }
+
+                String commitHash = gitService.commitStaged(deployCode, spaceCode, commitMsg,
+                        getAuthorName(user), getAuthorEmail(user));
+
+                // 4. 标记变更为已提交
+                LocalDateTime now = LocalDateTime.now();
+                for (FileChange change : changes) {
+                    change.setCommitted(1);
+                    change.setCommitId(commitHash);
+                    change.setCommittedDate(now);
+                    fileChangeMapper.updateById(change);
+                }
+
+                // 5. 更新 FileIndex 的 lastCommitId
+                updateFileIndexCommitId(deployCode, spaceCode, changes, commitHash);
+
+                // 6. 可选推送
+                if (Boolean.TRUE.equals(request.getPushToRemote())) {
+                    gitService.push(deployCode, spaceCode);
+                }
+
+                return commitHash;
+
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to commit: " + e.getMessage(), e);
             }
-
-            if (!addPaths.isEmpty()) {
-                gitService.addFiles(repoId, addPaths);
-            }
-            if (!rmPaths.isEmpty()) {
-                gitService.rmFiles(repoId, rmPaths);
-            }
-
-            // 3. 提交
-            String commitMsg = request.getCommitMessage();
-            if (commitMsg == null || commitMsg.isEmpty()) {
-                commitMsg = "Commit " + changes.size() + " change(s)";
-            }
-
-            String commitHash = gitService.commitStaged(repoId, commitMsg,
-                    getAuthorName(user), getAuthorEmail(user));
-
-            // 4. 标记变更为已提交
-            LocalDateTime now = LocalDateTime.now();
-            for (FileChange change : changes) {
-                change.setCommitted(1);
-                change.setCommitId(commitHash);
-                change.setCommittedAt(now);
-                fileChangeMapper.updateById(change);
-            }
-
-            // 5. 更新 FileIndex 的 lastCommitId
-            updateFileIndexCommitId(repoId, changes, commitHash);
-
-            // 6. 可选推送
-            if (Boolean.TRUE.equals(request.getPushToRemote())) {
-                gitService.push(repoId);
-            }
-
-            return commitHash;
-
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to commit: " + e.getMessage(), e);
-        }
 
         } finally {
             lockManager.releaseLock(repoLock);
         }
     }
 
-    /** 提交后更新相关 FileIndex 的 lastCommitId */
-    private void updateFileIndexCommitId(Long repoId, List<FileChange> changes, String commitHash) {
+    /**
+     * 提交后更新相关 FileIndex 的 lastCommitId
+     */
+    private void updateFileIndexCommitId(String deployCode, String spaceCode, List<FileChange> changes, String commitHash) {
         for (FileChange change : changes) {
             String targetPath = change.getNewPath() != null ? change.getNewPath() : change.getFilePath();
-            FileIndex idx = findFileIndex(repoId, targetPath);
+            FileIndex idx = findFileIndex(deployCode, spaceCode, targetPath);
             if (idx == null && "DELETE".equals(change.getChangeType())) {
                 // 已删除的文件查找（包含已标记删除的）
                 idx = fileIndexMapper.selectOne(
                         new LambdaQueryWrapper<FileIndex>()
-                                .eq(FileIndex::getRepoId, repoId)
+                                .eq(FileIndex::getDeployCode, deployCode)
+                                .eq(FileIndex::getSpaceCode, spaceCode)
                                 .eq(FileIndex::getFilePath, change.getFilePath())
                                 .orderByDesc(FileIndex::getId)
                                 .last("LIMIT 1")
@@ -545,18 +745,19 @@ public class FileCollaborationService {
      */
     @Transactional
     public FileLock acquireEditLock(FileLockRequest request) {
-        Long repoId = request.getRepoId();
+        String deployCode = request.getDeployCode();
+        String spaceCode = request.getSpaceCode();
         String filePath = request.getFilePath();
 
         Long userId = resolveUserId(request);
 
-        FileIndex fileIndex = findFileIndex(repoId, filePath);
+        FileIndex fileIndex = findFileIndex(deployCode, spaceCode, filePath);
         if (fileIndex == null) {
             throw new RuntimeException("File not found: " + filePath);
         }
 
         // 检查是否已有其他用户的活跃锁
-        FileLock existingLock = findActiveEditLock(repoId, filePath);
+        FileLock existingLock = findActiveEditLock(deployCode, spaceCode, filePath);
         if (existingLock != null && !existingLock.getUserId().equals(userId)) {
             User lockOwner = userMapper.selectById(existingLock.getUserId());
             String lockOwnerName = lockOwner != null ? lockOwner.getUsername() : "unknown";
@@ -580,12 +781,13 @@ public class FileCollaborationService {
         int expireSeconds = request.getExpireSeconds() != null ? request.getExpireSeconds() : 300;
 
         FileLock fileLock = new FileLock();
-        fileLock.setRepoId(repoId);
+        fileLock.setDeployCode(deployCode);
+        fileLock.setSpaceCode(spaceCode);
         fileLock.setFilePath(filePath);
         fileLock.setUserId(userId);
         fileLock.setLockToken(lockToken);
         fileLock.setExpireTime(LocalDateTime.now().plusSeconds(expireSeconds));
-        fileLock.setCreatedAt(LocalDateTime.now());
+        fileLock.setCreateDate(LocalDateTime.now());
         fileLockMapper.insert(fileLock);
 
         // 同步更新 FileIndex 的锁定状态
@@ -601,11 +803,12 @@ public class FileCollaborationService {
      */
     @Transactional
     public void releaseEditLock(FileLockRequest request) {
-        Long repoId = request.getRepoId();
+        String deployCode = request.getDeployCode();
+        String spaceCode = request.getSpaceCode();
         String filePath = request.getFilePath();
         Long userId = resolveUserId(request);
 
-        FileLock lock = findActiveEditLock(repoId, filePath);
+        FileLock lock = findActiveEditLock(deployCode, spaceCode, filePath);
         if (lock == null) {
             return;
         }
@@ -616,7 +819,7 @@ public class FileCollaborationService {
 
         fileLockMapper.deleteById(lock.getId());
 
-        FileIndex fileIndex = findFileIndex(repoId, filePath);
+        FileIndex fileIndex = findFileIndex(deployCode, spaceCode, filePath);
         if (fileIndex != null) {
             fileIndex.setLockedBy(null);
             fileIndex.setLockedAt(null);
@@ -627,8 +830,8 @@ public class FileCollaborationService {
     /**
      * 查询文件的编辑锁状态
      */
-    public Map<String, Object> getEditLockStatus(Long repoId, String filePath) {
-        FileLock lock = findActiveEditLock(repoId, filePath);
+    public Map<String, Object> getEditLockStatus(String deployCode, String spaceCode, String filePath) {
+        FileLock lock = findActiveEditLock(deployCode, spaceCode, filePath);
         Map<String, Object> result = new HashMap<>();
 
         if (lock == null) {
@@ -639,7 +842,7 @@ public class FileCollaborationService {
         User lockOwner = userMapper.selectById(lock.getUserId());
         result.put("locked", true);
         result.put("lockedBy", lockOwner != null ? lockOwner.getUsername() : "unknown");
-        result.put("lockedAt", lock.getCreatedAt());
+        result.put("lockedAt", lock.getCreateDate());
         result.put("expireTime", lock.getExpireTime());
         result.put("lockToken", lock.getLockToken());
         return result;
@@ -650,9 +853,10 @@ public class FileCollaborationService {
     /**
      * 获取文件/文件夹列表
      */
-    public List<FileIndex> getFileList(Long repoId, String parentPath) {
+    public List<FileIndex> getFileList(String deployCode, String spaceCode, String parentPath) {
         LambdaQueryWrapper<FileIndex> wrapper = new LambdaQueryWrapper<FileIndex>()
-                .eq(FileIndex::getRepoId, repoId)
+                .eq(FileIndex::getDeployCode, deployCode)
+                .eq(FileIndex::getSpaceCode, spaceCode)
                 .eq(FileIndex::getIsDeleted, 0);
 
         if (parentPath != null && !parentPath.isEmpty()) {
@@ -665,9 +869,9 @@ public class FileCollaborationService {
     /**
      * 获取文件历史
      */
-    public List<GitService.CommitInfo> getFileHistory(Long repoId, String filePath) {
+    public List<GitService.CommitInfo> getFileHistory(String deployCode, String spaceCode, String filePath) {
         try {
-            return gitService.getFileHistory(repoId, filePath);
+            return gitService.getFileHistory(deployCode, spaceCode, filePath);
         } catch (Exception e) {
             throw new RuntimeException("Failed to get file history: " + e.getMessage(), e);
         }
@@ -675,17 +879,20 @@ public class FileCollaborationService {
 
     // ======================== 私有工具方法 ========================
 
-    /** 记录一条文件变更 */
-    private FileChange recordChange(Long repoId, String filePath,
+    /**
+     * 记录一条文件变更
+     */
+    private FileChange recordChange(String deployCode, String spaceCode, String filePath,
                                     String changeType, String newPath, Long operatorId) {
         FileChange change = new FileChange();
-        change.setRepoId(repoId);
+        change.setDeployCode(deployCode);
+        change.setSpaceCode(spaceCode);
         change.setFilePath(filePath);
         change.setChangeType(changeType);
         change.setNewPath(newPath);
         change.setCommitted(0);
         change.setOperatorId(operatorId);
-        change.setCreatedAt(LocalDateTime.now());
+        change.setCreateDate(LocalDateTime.now());
         fileChangeMapper.insert(change);
         return change;
     }
@@ -701,43 +908,50 @@ public class FileCollaborationService {
         return user;
     }
 
-    private FileIndex findFileIndex(Long repoId, String filePath) {
+    private FileIndex findFileIndex(String deployCode, String spaceCode, String filePath) {
         return fileIndexMapper.selectOne(
                 new LambdaQueryWrapper<FileIndex>()
-                        .eq(FileIndex::getRepoId, repoId)
+                        .eq(FileIndex::getDeployCode, deployCode)
+                        .eq(FileIndex::getSpaceCode, spaceCode)
                         .eq(FileIndex::getFilePath, filePath)
                         .eq(FileIndex::getIsDeleted, 0)
         );
     }
 
-    private void createFileIndex(Long repoId, String filePath, int fileType,
+    private void createFileIndex(String deployCode, String spaceCode, String filePath, int fileType,
                                  Long fileSize, Long userId) {
         FileIndex index = new FileIndex();
-        index.setRepoId(repoId);
+        index.setDeployCode(deployCode);
+        index.setSpaceCode(spaceCode);
         index.setFilePath(filePath);
         index.setFileType(fileType);
         index.setFileSize(fileSize);
         index.setVersion(1);
         index.setIsDeleted(0);
         index.setCreatedBy(userId);
-        index.setCreatedAt(LocalDateTime.now());
+        index.setCreateDate(LocalDateTime.now());
         fileIndexMapper.insert(index);
     }
 
-    /** 查找文件的活跃编辑锁（未过期） */
-    private FileLock findActiveEditLock(Long repoId, String filePath) {
+    /**
+     * 查找文件的活跃编辑锁（未过期）
+     */
+    private FileLock findActiveEditLock(String deployCode, String spaceCode, String filePath) {
         FileLock lock = fileLockMapper.selectOne(
                 new LambdaQueryWrapper<FileLock>()
-                        .eq(FileLock::getRepoId, repoId)
+                        .eq(FileLock::getDeployCode, deployCode)
+                        .eq(FileLock::getSpaceCode, spaceCode)
                         .eq(FileLock::getFilePath, filePath)
                         .gt(FileLock::getExpireTime, LocalDateTime.now())
-                        .orderByDesc(FileLock::getCreatedAt)
+                        .orderByDesc(FileLock::getCreateDate)
                         .last("LIMIT 1")
         );
         return lock;
     }
 
-    /** 解析用户 ID（优先使用 operator，其次使用 userId） */
+    /**
+     * 解析用户 ID（优先使用 operator，其次使用 userId）
+     */
     private Long resolveUserId(FileLockRequest request) {
         if (request.getOperator() != null && !request.getOperator().isEmpty()) {
             User user = findUserByUsername(request.getOperator());

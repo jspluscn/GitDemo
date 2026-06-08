@@ -10,9 +10,14 @@ import lombok.Data;
 public class FileOperationRequest {
     
     /**
-     * 仓库 ID
+     * 部署编码
      */
-    private Long repoId;
+    private String deployCode;
+    
+    /**
+     * 空间编码
+     */
+    private String spaceCode;
     
     /**
      * 文件路径 (相对于仓库根目录)

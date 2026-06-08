@@ -9,10 +9,11 @@ import java.time.LocalDateTime;
 public class FileLock {
     @TableId(type = IdType.AUTO)
     private Long id;
-    private Long repoId;
+    private String deployCode;  // 部署编码
+    private String spaceCode;   // 空间编码
     private String filePath;
     private Long userId;
     private String lockToken;
     private LocalDateTime expireTime;
-    private LocalDateTime createdAt;
+    private LocalDateTime createDate;
 }

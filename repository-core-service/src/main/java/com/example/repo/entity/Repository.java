@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 public class Repository {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private String deployCode;  // 部署编码
+    private String spaceCode;   // 空间编码
     private String name;
     private String description;
     private Long ownerId;
@@ -17,6 +19,6 @@ public class Repository {
     private Integer version;
     @TableLogic
     private Integer isDeleted;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    private LocalDateTime createDate;
+    private LocalDateTime lastUpdatedDate;
 }

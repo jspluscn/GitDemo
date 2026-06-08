@@ -16,8 +16,11 @@ public class FileChange {
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    /** 所属仓库 ID */
-    private Long repoId;
+    /** 部署编码 */
+    private String deployCode;
+
+    /** 空间编码 */
+    private String spaceCode;
 
     /** 文件路径 */
     private String filePath;
@@ -42,7 +45,7 @@ public class FileChange {
     /** 操作人 */
     private Long operatorId;
 
-    private LocalDateTime createdAt;
+    private LocalDateTime createDate;
 
-    private LocalDateTime committedAt;
+    private LocalDateTime committedDate;
 }

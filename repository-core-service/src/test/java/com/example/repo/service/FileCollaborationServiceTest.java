@@ -14,7 +14,6 @@ import com.example.repo.mapper.FileChangeMapper;
 import com.example.repo.mapper.FileIndexMapper;
 import com.example.repo.mapper.FileLockMapper;
 import com.example.repo.mapper.UserMapper;
-import com.example.repo.nas.NasHealthChecker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,13 +26,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -66,15 +65,13 @@ class FileCollaborationServiceTest {
     private UserMapper userMapper;
 
     @Mock
-    private NasHealthChecker nasHealthChecker;
-
-    @Mock
     private RLock mockFileLock;
 
     @Mock
     private RLock mockRepoLock;
 
-    private static final Long REPO_ID = 1L;
+    private static final String DEPLOY_CODE = "deploy_code";
+    private static final String SPACE_CODE = "space_code";
     private static final String OPERATOR = "testuser";
     private static final String FILE_PATH = "docs/readme.txt";
     private static final String FOLDER_PATH = "docs/subfolder";
@@ -92,14 +89,6 @@ class FileCollaborationServiceTest {
 
     // ======================== 辅助方法 ========================
 
-    private void mockHealthyNas() {
-        when(nasHealthChecker.isHealthy()).thenReturn(true);
-    }
-
-    private void mockUnhealthyNas() {
-        when(nasHealthChecker.isHealthy()).thenReturn(false);
-    }
-
     private void mockUserExists() {
         when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(testUser);
     }
@@ -109,24 +98,26 @@ class FileCollaborationServiceTest {
     }
 
     private void mockLocksAcquired() {
-        when(lockManager.tryGetFileLock(anyLong(), anyString(), anyLong(), anyLong())).thenReturn(mockFileLock);
-        when(lockManager.tryGetRepoLock(anyLong(), anyLong(), anyLong())).thenReturn(mockRepoLock);
+        when(lockManager.tryGetFileLock(anyString(), anyString(), anyString(), anyLong(), anyLong())).thenReturn(mockFileLock);
+        when(lockManager.tryGetRepoLock(anyString(), anyString(), anyLong(), anyLong())).thenReturn(mockRepoLock);
     }
 
     private void mockFileLockFailed() {
-        when(lockManager.tryGetFileLock(anyLong(), anyString(), anyLong(), anyLong())).thenReturn(null);
+        when(lockManager.tryGetFileLock(anyString(), anyString(), anyString(), anyLong(), anyLong())).thenReturn(null);
     }
 
     private void mockRepoLockFailed() {
-        when(lockManager.tryGetFileLock(anyLong(), anyString(), anyLong(), anyLong())).thenReturn(mockFileLock);
-        when(lockManager.tryGetRepoLock(anyLong(), anyLong(), anyLong())).thenReturn(null);
+        when(lockManager.tryGetFileLock(anyString(), anyString(), anyString(), anyLong(), anyLong())).thenReturn(mockFileLock);
+        when(lockManager.tryGetRepoLock(anyString(), anyString(), anyLong(), anyLong())).thenReturn(null);
     }
 
     private void mockNoExistingFileIndex() {
         when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
     }
 
-    /** 模拟无活跃编辑锁 */
+    /**
+     * 模拟无活跃编辑锁
+     */
     private void mockNoActiveEditLock() {
         when(fileLockMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
     }
@@ -134,7 +125,8 @@ class FileCollaborationServiceTest {
     private FileIndex buildFileIndex(String path, int fileType) {
         FileIndex index = new FileIndex();
         index.setId(1L);
-        index.setRepoId(REPO_ID);
+        index.setDeployCode(DEPLOY_CODE);
+        index.setSpaceCode(SPACE_CODE);
         index.setFilePath(path);
         index.setFileType(fileType);
         index.setFileSize(0L);
@@ -147,7 +139,8 @@ class FileCollaborationServiceTest {
 
     private FileOperationRequest buildCreateFileRequest(String path, String content) {
         FileOperationRequest req = new FileOperationRequest();
-        req.setRepoId(REPO_ID);
+        req.setDeployCode(DEPLOY_CODE);
+        req.setSpaceCode(SPACE_CODE);
         req.setFilePath(path);
         req.setContent(content);
         req.setOperator(OPERATOR);
@@ -157,7 +150,8 @@ class FileCollaborationServiceTest {
 
     private FileOperationRequest buildCreateFolderRequest(String path) {
         FileOperationRequest req = new FileOperationRequest();
-        req.setRepoId(REPO_ID);
+        req.setDeployCode(DEPLOY_CODE);
+        req.setSpaceCode(SPACE_CODE);
         req.setFilePath(path);
         req.setOperator(OPERATOR);
         req.setFileType(2);
@@ -167,12 +161,13 @@ class FileCollaborationServiceTest {
     private FileLock buildFileLock(Long userId, String filePath) {
         FileLock lock = new FileLock();
         lock.setId(1L);
-        lock.setRepoId(REPO_ID);
+        lock.setDeployCode(DEPLOY_CODE);
+        lock.setSpaceCode(SPACE_CODE);
         lock.setFilePath(filePath);
         lock.setUserId(userId);
         lock.setLockToken("test-token-123");
         lock.setExpireTime(LocalDateTime.now().plusMinutes(5));
-        lock.setCreatedAt(LocalDateTime.now());
+        lock.setCreateDate(LocalDateTime.now());
         return lock;
     }
 
@@ -185,7 +180,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件 - 正常场景，含内容，不执行commit")
         void createFile_withContent_success() throws Exception {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockLocksAcquired();
@@ -198,8 +192,8 @@ class FileCollaborationServiceTest {
             assertEquals("ADD", result.getChangeType());
             assertEquals(0, result.getCommitted());
 
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "Hello World");
-            verify(gitService, never()).commit(anyLong(), anyString(), anyString(), anyString());
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "Hello World");
+            verify(gitService, never()).commit(anyString(), anyString(), anyString(), anyString(), anyString());
 
             // 验证索引创建
             ArgumentCaptor<FileIndex> captor = ArgumentCaptor.forClass(FileIndex.class);
@@ -219,7 +213,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件 - 内容为null时使用空字符串")
         void createFile_withNullContent_success() throws Exception {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockLocksAcquired();
@@ -228,7 +221,7 @@ class FileCollaborationServiceTest {
             FileChange result = fileCollaborationService.createFileOrFolder(request);
 
             assertNotNull(result);
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "");
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "");
 
             ArgumentCaptor<FileIndex> captor = ArgumentCaptor.forClass(FileIndex.class);
             verify(fileIndexMapper).insert(captor.capture());
@@ -238,7 +231,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件夹 - 正常场景")
         void createFolder_success() throws Exception {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockLocksAcquired();
@@ -248,8 +240,8 @@ class FileCollaborationServiceTest {
 
             assertNotNull(result);
             assertEquals("ADD", result.getChangeType());
-            verify(gitService).createFolder(REPO_ID, FOLDER_PATH);
-            verify(gitService, never()).commit(anyLong(), anyString(), anyString(), anyString());
+            verify(gitService).createFolder(DEPLOY_CODE, SPACE_CODE, FOLDER_PATH);
+            verify(gitService, never()).commit(anyString(), anyString(), anyString(), anyString(), anyString());
 
             ArgumentCaptor<FileIndex> captor = ArgumentCaptor.forClass(FileIndex.class);
             verify(fileIndexMapper).insert(captor.capture());
@@ -260,7 +252,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件 - fileType为null时默认创建文件")
         void createFile_defaultFileType_success() throws Exception {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockLocksAcquired();
@@ -269,14 +260,13 @@ class FileCollaborationServiceTest {
             request.setFileType(null);
             fileCollaborationService.createFileOrFolder(request);
 
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "data");
-            verify(gitService, never()).createFolder(anyLong(), anyString());
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "data");
+            verify(gitService, never()).createFolder(anyString(), anyString(), anyString());
         }
 
         @Test
         @DisplayName("创建失败 - NAS不可用")
         void create_nasUnavailable_throwsException() {
-            mockUnhealthyNas();
             FileOperationRequest request = buildCreateFileRequest(FILE_PATH, "content");
             RuntimeException ex = assertThrows(RuntimeException.class,
                     () -> fileCollaborationService.createFileOrFolder(request));
@@ -286,7 +276,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建失败 - 用户不存在")
         void create_userNotFound_throwsException() {
-            mockHealthyNas();
             mockUserNotFound();
             FileOperationRequest request = buildCreateFileRequest(FILE_PATH, "content");
             RuntimeException ex = assertThrows(RuntimeException.class,
@@ -297,7 +286,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件失败 - 文件已存在")
         void createFile_alreadyExists_throwsException() {
-            mockHealthyNas();
             mockUserExists();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(buildFileIndex(FILE_PATH, 1));
             FileOperationRequest request = buildCreateFileRequest(FILE_PATH, "content");
@@ -309,7 +297,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建失败 - 文件锁获取失败（并发冲突）")
         void create_fileLockFailed_throwsException() {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockFileLockFailed();
@@ -322,7 +309,6 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建失败 - 仓库锁获取失败（仓库繁忙）")
         void create_repoLockFailed_throwsException() {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockRepoLockFailed();
@@ -336,11 +322,10 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("创建文件 - Git操作异常")
         void createFile_gitException_throwsException() throws Exception {
-            mockHealthyNas();
             mockUserExists();
             mockNoExistingFileIndex();
             mockLocksAcquired();
-            doThrow(new java.io.IOException("Disk full")).when(gitService).writeFileContent(anyLong(), anyString(), anyString());
+            doThrow(new java.io.IOException("Disk full")).when(gitService).writeFileContent(anyString(), anyString(), anyString(), anyString());
 
             FileOperationRequest request = buildCreateFileRequest(FILE_PATH, "content");
             RuntimeException ex = assertThrows(RuntimeException.class,
@@ -361,14 +346,14 @@ class FileCollaborationServiceTest {
         @DisplayName("更新文件内容 - 正常场景，不执行commit")
         void updateFile_contentOnly_success() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("Updated content");
             request.setOperator(OPERATOR);
@@ -379,8 +364,8 @@ class FileCollaborationServiceTest {
             assertEquals("MODIFY", result.getChangeType());
             assertEquals(0, result.getCommitted());
 
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "Updated content");
-            verify(gitService, never()).commit(anyLong(), anyString(), anyString(), anyString());
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "Updated content");
+            verify(gitService, never()).commit(anyString(), anyString(), anyString(), anyString(), anyString());
 
             // 验证索引版本号递增
             verify(fileIndexMapper).updateById(argThat(idx -> idx.getVersion() == 2));
@@ -392,14 +377,14 @@ class FileCollaborationServiceTest {
         void updateFile_withExpectedVersion_success() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             existingFile.setVersion(5);
-            mockHealthyNas();
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("Updated");
             request.setOperator(OPERATOR);
@@ -407,7 +392,7 @@ class FileCollaborationServiceTest {
 
             FileChange result = fileCollaborationService.updateFileOrFolder(request);
             assertNotNull(result);
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "Updated");
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "Updated");
         }
 
         @Test
@@ -415,12 +400,12 @@ class FileCollaborationServiceTest {
         void updateFile_versionConflict_throwsConflictException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             existingFile.setVersion(3); // 当前版本3
-            mockHealthyNas();
             mockUserExists();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("Updated");
             request.setOperator(OPERATOR);
@@ -433,7 +418,7 @@ class FileCollaborationServiceTest {
             assertTrue(ex.getMessage().contains("current version 3"));
 
             // 不应获取文件锁（在版本校验前就拒绝了）
-            verify(lockManager, never()).tryGetFileLock(anyLong(), anyString(), anyLong(), anyLong());
+            verify(lockManager, never()).tryGetFileLock(anyString(), anyString(), anyString(), anyLong(), anyLong());
         }
 
         @Test
@@ -441,14 +426,15 @@ class FileCollaborationServiceTest {
         void updateFile_noExpectedVersion_skipsVersionCheck() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             existingFile.setVersion(10);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("Updated");
             request.setOperator(OPERATOR);
@@ -456,14 +442,14 @@ class FileCollaborationServiceTest {
 
             FileChange result = fileCollaborationService.updateFileOrFolder(request);
             assertNotNull(result);
-            verify(gitService).writeFileContent(REPO_ID, FILE_PATH, "Updated");
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, FILE_PATH, "Updated");
         }
 
         @Test
         @DisplayName("更新文件 - 被其他用户编辑锁锁定，拒绝更新")
         void updateFile_editLockedByOtherUser_throwsException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
@@ -473,7 +459,8 @@ class FileCollaborationServiceTest {
             when(userMapper.selectById(200L)).thenReturn(testUser);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("Updated");
             request.setOperator(OPERATOR);
@@ -488,21 +475,22 @@ class FileCollaborationServiceTest {
         void renameFile_onlyNewPath_success() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             String newPath = "docs/renamed.txt";
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setNewPath(newPath);
             request.setOperator(OPERATOR);
 
             FileChange result = fileCollaborationService.updateFileOrFolder(request);
             assertNotNull(result);
-            verify(gitService).renameFile(REPO_ID, FILE_PATH, newPath);
+            verify(gitService).renameFile(DEPLOY_CODE, SPACE_CODE, FILE_PATH, newPath);
             verify(fileIndexMapper).updateById(argThat(idx ->
                     idx.getFilePath().equals(newPath) && idx.getVersion() == 2));
         }
@@ -512,14 +500,15 @@ class FileCollaborationServiceTest {
         void renameFile_andUpdateContent_success() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             String newPath = "docs/renamed.txt";
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setNewPath(newPath);
             request.setContent("brand new content");
@@ -527,16 +516,16 @@ class FileCollaborationServiceTest {
 
             FileChange result = fileCollaborationService.updateFileOrFolder(request);
             assertNotNull(result);
-            verify(gitService).renameFile(REPO_ID, FILE_PATH, newPath);
-            verify(gitService).writeFileContent(REPO_ID, newPath, "brand new content");
+            verify(gitService).renameFile(DEPLOY_CODE, SPACE_CODE, FILE_PATH, newPath);
+            verify(gitService).writeFileContent(DEPLOY_CODE, SPACE_CODE, newPath, "brand new content");
         }
 
         @Test
         @DisplayName("更新失败 - NAS不可用")
         void update_nasUnavailable_throwsException() {
-            mockUnhealthyNas();
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("data");
             request.setOperator(OPERATOR);
@@ -548,11 +537,12 @@ class FileCollaborationServiceTest {
         @Test
         @DisplayName("更新失败 - 文件不存在")
         void update_notFound_throwsException() {
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoExistingFileIndex();
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath("nonexistent.txt");
             request.setContent("data");
             request.setOperator(OPERATOR);
@@ -565,13 +555,14 @@ class FileCollaborationServiceTest {
         @DisplayName("更新失败 - 文件锁获取失败")
         void update_fileLockFailed_throwsException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
             mockFileLockFailed();
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("data");
             request.setOperator(OPERATOR);
@@ -584,13 +575,14 @@ class FileCollaborationServiceTest {
         @DisplayName("更新失败 - 仓库锁获取失败")
         void update_repoLockFailed_throwsException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
             mockRepoLockFailed();
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("data");
             request.setOperator(OPERATOR);
@@ -603,14 +595,15 @@ class FileCollaborationServiceTest {
         @DisplayName("更新文件 - content和newPath都为null时抛异常")
         void updateFile_noContentAndNoNewPath_throwsException() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
@@ -623,16 +616,17 @@ class FileCollaborationServiceTest {
         @DisplayName("更新文件 - Git操作异常")
         void updateFile_gitException_throwsException() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
             doThrow(new java.io.IOException("Permission denied"))
-                    .when(gitService).writeFileContent(anyLong(), anyString(), anyString());
+                    .when(gitService).writeFileContent(anyString(), anyString(), anyString(), anyString());
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("new data");
             request.setOperator(OPERATOR);
@@ -650,23 +644,22 @@ class FileCollaborationServiceTest {
     @Nested
     @DisplayName("删除文件或文件夹 - deleteFileOrFolder")
     class DeleteTests {
-
         @Test
         @DisplayName("删除文件 - 正常场景，不执行commit")
         void deleteFile_success() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
-            FileChange result = fileCollaborationService.deleteFileOrFolder(REPO_ID, FILE_PATH, OPERATOR);
+            FileChange result = fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FILE_PATH, OPERATOR);
 
             assertNotNull(result);
             assertEquals("DELETE", result.getChangeType());
             assertEquals(0, result.getCommitted());
-            verify(gitService, never()).commit(anyLong(), anyString(), anyString(), anyString());
+            verify(gitService, never()).commit(anyString(), anyString(), anyString(), anyString(), anyString());
 
             // 验证索引标记为已删除
             verify(fileIndexMapper).updateById(argThat(idx ->
@@ -680,18 +673,18 @@ class FileCollaborationServiceTest {
         @DisplayName("删除文件夹 - 正常场景，无子项")
         void deleteFolder_empty_success() throws Exception {
             FileIndex folderIndex = buildFileIndex(FOLDER_PATH, 2);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(folderIndex);
             when(fileIndexMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(Collections.emptyList());
 
-            FileChange result = fileCollaborationService.deleteFileOrFolder(REPO_ID, FOLDER_PATH, OPERATOR);
+            FileChange result = fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FOLDER_PATH, OPERATOR);
 
             assertNotNull(result);
             assertEquals("DELETE", result.getChangeType());
-            verify(gitService).deleteFolder(REPO_ID, FOLDER_PATH);
+            verify(gitService).deleteFolder(DEPLOY_CODE, SPACE_CODE, FOLDER_PATH);
             verify(fileIndexMapper).updateById(argThat(idx ->
                     idx.getIsDeleted() == 1 && idx.getFilePath().equals(FOLDER_PATH)));
         }
@@ -703,7 +696,7 @@ class FileCollaborationServiceTest {
             FileIndex child1 = buildFileIndex(FOLDER_PATH + "/file1.txt", 1);
             FileIndex child2 = buildFileIndex(FOLDER_PATH + "/file2.txt", 1);
 
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
@@ -711,7 +704,7 @@ class FileCollaborationServiceTest {
             when(fileIndexMapper.selectList(any(LambdaQueryWrapper.class)))
                     .thenReturn(List.of(child1, child2));
 
-            FileChange result = fileCollaborationService.deleteFileOrFolder(REPO_ID, FOLDER_PATH, OPERATOR);
+            FileChange result = fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FOLDER_PATH, OPERATOR);
 
             assertNotNull(result);
             // 文件夹本身 + 2个子项 = 3次
@@ -722,7 +715,7 @@ class FileCollaborationServiceTest {
         @DisplayName("删除失败 - 被其他用户编辑锁锁定")
         void delete_editLockedByOtherUser_throwsException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
@@ -731,26 +724,25 @@ class FileCollaborationServiceTest {
             when(userMapper.selectById(200L)).thenReturn(testUser);
 
             RuntimeException ex = assertThrows(RuntimeException.class,
-                    () -> fileCollaborationService.deleteFileOrFolder(REPO_ID, FILE_PATH, OPERATOR));
+                    () -> fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FILE_PATH, OPERATOR));
             assertTrue(ex.getMessage().contains("currently being edited by user"));
         }
 
         @Test
         @DisplayName("删除失败 - NAS不可用")
         void delete_nasUnavailable_throwsException() {
-            mockUnhealthyNas();
             RuntimeException ex = assertThrows(RuntimeException.class,
-                    () -> fileCollaborationService.deleteFileOrFolder(REPO_ID, FILE_PATH, OPERATOR));
+                    () -> fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FILE_PATH, OPERATOR));
             assertTrue(ex.getMessage().contains("NAS storage is currently unavailable"));
         }
 
         @Test
         @DisplayName("删除失败 - 用户不存在")
         void delete_userNotFound_throwsException() {
-            mockHealthyNas();
+            
             mockUserNotFound();
             RuntimeException ex = assertThrows(RuntimeException.class,
-                    () -> fileCollaborationService.deleteFileOrFolder(REPO_ID, FILE_PATH, OPERATOR));
+                    () -> fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FILE_PATH, OPERATOR));
             assertTrue(ex.getMessage().contains("User not found"));
         }
 
@@ -758,13 +750,13 @@ class FileCollaborationServiceTest {
         @DisplayName("删除失败 - 文件锁获取失败")
         void delete_fileLockFailed_throwsException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
             mockFileLockFailed();
             RuntimeException ex = assertThrows(RuntimeException.class,
-                    () -> fileCollaborationService.deleteFileOrFolder(REPO_ID, FILE_PATH, OPERATOR));
+                    () -> fileCollaborationService.deleteFileOrFolder(DEPLOY_CODE, SPACE_CODE, FILE_PATH, OPERATOR));
             assertTrue(ex.getMessage().contains("currently locked"));
         }
     }
@@ -784,14 +776,16 @@ class FileCollaborationServiceTest {
             when(fileLockMapper.insert(any(FileLock.class))).thenReturn(1);
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
             FileLock result = fileCollaborationService.acquireEditLock(request);
 
             assertNotNull(result);
-            assertEquals(REPO_ID, result.getRepoId());
+            assertEquals(SPACE_CODE, result.getSpaceCode());
+            assertEquals(DEPLOY_CODE, result.getDeployCode());
             assertEquals(FILE_PATH, result.getFilePath());
             assertEquals(testUser.getId(), result.getUserId());
             assertNotNull(result.getLockToken());
@@ -809,7 +803,8 @@ class FileCollaborationServiceTest {
             when(fileLockMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingLock);
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
             request.setExpireSeconds(600);
@@ -832,7 +827,8 @@ class FileCollaborationServiceTest {
             when(userMapper.selectById(200L)).thenReturn(testUser);
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
@@ -850,7 +846,8 @@ class FileCollaborationServiceTest {
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(buildFileIndex(FILE_PATH, 1));
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
@@ -868,7 +865,8 @@ class FileCollaborationServiceTest {
             mockNoActiveEditLock();
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
@@ -884,7 +882,8 @@ class FileCollaborationServiceTest {
             when(fileLockMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(otherLock);
 
             FileLockRequest request = new FileLockRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setOperator(OPERATOR);
 
@@ -898,7 +897,7 @@ class FileCollaborationServiceTest {
         void getEditLockStatus_notLocked() {
             mockNoActiveEditLock();
 
-            Map<String, Object> status = fileCollaborationService.getEditLockStatus(REPO_ID, FILE_PATH);
+            Map<String, Object> status = fileCollaborationService.getEditLockStatus(DEPLOY_CODE, SPACE_CODE, FILE_PATH);
             assertFalse((Boolean) status.get("locked"));
         }
 
@@ -909,7 +908,7 @@ class FileCollaborationServiceTest {
             when(fileLockMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(lock);
             when(userMapper.selectById(testUser.getId())).thenReturn(testUser);
 
-            Map<String, Object> status = fileCollaborationService.getEditLockStatus(REPO_ID, FILE_PATH);
+            Map<String, Object> status = fileCollaborationService.getEditLockStatus(DEPLOY_CODE, SPACE_CODE, FILE_PATH);
             assertTrue((Boolean) status.get("locked"));
             assertEquals("testuser", status.get("lockedBy"));
             assertNotNull(status.get("expireTime"));
@@ -928,14 +927,15 @@ class FileCollaborationServiceTest {
         void versionMatch_updateSuccess() throws Exception {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             existingFile.setVersion(7);
-            mockHealthyNas();
+            
             mockUserExists();
             mockNoActiveEditLock();
             mockLocksAcquired();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("content");
             request.setOperator(OPERATOR);
@@ -950,12 +950,13 @@ class FileCollaborationServiceTest {
         void versionMismatch_throwsConflictException() {
             FileIndex existingFile = buildFileIndex(FILE_PATH, 1);
             existingFile.setVersion(10);
-            mockHealthyNas();
+            
             mockUserExists();
             when(fileIndexMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingFile);
 
             FileOperationRequest request = new FileOperationRequest();
-            request.setRepoId(REPO_ID);
+            request.setDeployCode(DEPLOY_CODE);
+            request.setSpaceCode(SPACE_CODE);
             request.setFilePath(FILE_PATH);
             request.setContent("content");
             request.setOperator(OPERATOR);
