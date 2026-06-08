@@ -62,7 +62,7 @@ public class RepositoryController {
     /**
      * 获取仓库详情
      */
-    @GetMapping("/{deployCode}/{spaceCode}")
+    @GetMapping("/{id}")
     public ApiResponse<Repository> getRepository(@PathVariable Long id) {
         try {
             Repository repository = repositoryMapper.selectById(id);

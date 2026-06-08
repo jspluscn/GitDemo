@@ -23,7 +23,7 @@ import java.util.Map;
  * 工作流：创建/更新/删除（记录变更）→ 查看变更 → 勾选提交推送
  */
 @RestController
-@RequestMapping("/api/files")
+@RequestMapping("/api/v1/files")
 public class FileController {
 
     @Autowired
