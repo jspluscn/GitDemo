@@ -62,9 +62,12 @@ public class FileOperationRequest {
     private Integer expectedVersion;
 
     /**
-     * 自动编辑锁的过期时间（秒）
-     * 仅用于 update/delete 操作，默认 60 秒
-     * 如果设置为 0 或负数，则不自动管理锁（需要手动调用 lock/acquire 和 lock/release）
+     * 是否在操作前自动获取编辑锁（仅用于 update/delete）
+     * - true: 操作前检查编辑锁，如果已被其他用户锁定则拒绝
+     * - false/null: 不检查编辑锁，仅依靠乐观锁防冲突
+     * 
+     * 注意：这不会自动获取/释放锁，只是验证是否有其他人的锁
+     * 如果需要长时间编辑，请手动调用 /lock/acquire 和 /lock/release
      */
-    private Integer expireSeconds;
+    private Boolean checkEditLock;
 }

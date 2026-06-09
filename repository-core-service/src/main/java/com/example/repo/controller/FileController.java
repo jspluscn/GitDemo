@@ -54,6 +54,10 @@ public class FileController {
      * - 文件: 更新内容，或通过 newPath 重命名/移动
      * - 文件夹: 通过 newPath 重命名/移动
      * 返回变更记录（不执行 git commit）
+     * 
+     * 【并发控制】：
+     * - expectedVersion: 乐观锁版本号（推荐 always 提供）
+     * - checkEditLock: 是否检查编辑锁（默认 false，设为 true 可防止覆盖他人正在编辑的文件）
      */
     @PutMapping("/update")
     public ApiResponse<FileChange> update(@RequestBody FileOperationRequest request) {
@@ -71,13 +75,16 @@ public class FileController {
      * 删除文件或文件夹
      * 删除文件夹时会同时删除其下所有文件
      * 返回变更记录（不执行 git commit）
+     * 
+     * @param checkEditLock 是否检查编辑锁（默认 false）
      */
     @DeleteMapping("/delete")
     public ApiResponse<FileChange> delete(@RequestParam String deployCode,@RequestParam String spaceCode,
                                           @RequestParam String filePath,
-                                          @RequestParam String operator) {
+                                          @RequestParam String operator,
+                                          @RequestParam(required = false, defaultValue = "false") Boolean checkEditLock) {
         try {
-            FileChange change = fileService.deleteFileOrFolder(deployCode, spaceCode, filePath, operator);
+            FileChange change = fileService.deleteFileOrFolder(deployCode, spaceCode, filePath, operator, checkEditLock);
             return ApiResponse.success(change);
         } catch (Exception e) {
             return ApiResponse.error(409, e.getMessage());

@@ -160,8 +160,10 @@ public class FileCollaborationService {
                             "Please reload the file and retry.");
         }
 
-        // 【第2层】编辑锁校验（可选）：如果用户手动获取了编辑锁，验证所有权
-        validateEditLockOwnership(deployCode, spaceCode, filePath, user.getId());
+        // 【第2层】编辑锁校验（可选）：如果前端要求检查编辑锁
+        if (Boolean.TRUE.equals(request.getCheckEditLock())) {
+            validateEditLockOwnership(deployCode, spaceCode, filePath, user.getId());
+        }
 
         // 【第3层】分布式锁：保证并发安全
         RLock fileLock = lockManager.tryGetFileLock(deployCode, spaceCode, filePath, 3, 30);
@@ -347,6 +349,14 @@ public class FileCollaborationService {
      */
     @Transactional
     public FileChange deleteFileOrFolder(String deployCode, String spaceCode, String filePath, String operator) {
+        return deleteFileOrFolder(deployCode, spaceCode, filePath, operator, false);
+    }
+    
+    /**
+     * 删除文件或文件夹（支持编辑锁检查）
+     */
+    @Transactional
+    public FileChange deleteFileOrFolder(String deployCode, String spaceCode, String filePath, String operator, boolean checkEditLock) {
         User user = findUserByUsername(operator);
     
         FileIndex fileIndex = findFileIndex(deployCode, spaceCode, filePath);
@@ -357,7 +367,9 @@ public class FileCollaborationService {
         int fileType = fileIndex.getFileType();
     
         // 【第2层】编辑锁校验（可选）
-        validateEditLockOwnership(deployCode, spaceCode, filePath, user.getId());
+        if (checkEditLock) {
+            validateEditLockOwnership(deployCode, spaceCode, filePath, user.getId());
+        }
     
         RLock fileLock = lockManager.tryGetFileLock(deployCode, spaceCode, filePath, 3, 30);
         if (fileLock == null) {
