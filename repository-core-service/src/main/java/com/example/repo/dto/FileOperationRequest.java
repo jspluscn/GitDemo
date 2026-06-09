@@ -60,4 +60,11 @@ public class FileOperationRequest {
      * 如果不一致说明有其他用户已经修改过该文件，拒绝更新并提示冲突
      */
     private Integer expectedVersion;
+
+    /**
+     * 自动编辑锁的过期时间（秒）
+     * 仅用于 update/delete 操作，默认 60 秒
+     * 如果设置为 0 或负数，则不自动管理锁（需要手动调用 lock/acquire 和 lock/release）
+     */
+    private Integer expireSeconds;
 }
