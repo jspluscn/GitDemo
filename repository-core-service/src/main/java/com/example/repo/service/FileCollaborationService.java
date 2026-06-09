@@ -240,8 +240,7 @@ public class FileCollaborationService {
         fileIndex.setLastUpdatedDate(LocalDateTime.now());
         fileIndexMapper.updateById(fileIndex);
 
-        String recordPath = (recordedNewPath != null) ? filePath : filePath;
-        return recordChange(deployCode, spaceCode, recordPath, changeType, recordedNewPath, user.getId());
+        return recordChange(deployCode, spaceCode, filePath, changeType, recordedNewPath, user.getId());
     }
 
     /**
